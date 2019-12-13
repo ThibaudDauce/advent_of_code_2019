@@ -1,0 +1,373 @@
+use std::collections::HashMap;
+use std::fs;
+extern crate sdl2; 
+
+use sdl2::pixels::Color;
+use sdl2::event::Event;
+use sdl2::rect::Rect;
+use sdl2::keyboard::Keycode;
+use std::time::Duration;
+
+fn main() {
+    let program_as_string = fs::read_to_string("input.txt").unwrap();
+    let mut program = parse_program(&program_as_string);
+    program.program.insert(0, 2);
+    
+    let mut tiles: HashMap<(i64, i64), i64> = HashMap::new();
+    let mut count = 0;
+
+    let mut outputs = vec![];
+    let mut ball_x = 0;
+    let mut paddle_x = 0;
+    loop {
+        if let ProgramResult::Output(new_program, output) = run_program(program, vec![]) {
+            program = new_program;
+            outputs.push(output);
+    
+            if outputs.len() == 3 {
+                if outputs[2] == 2 {
+                    count += 1;
+                }
+                if outputs[2] == 4 {
+                    ball_x = outputs[0];
+                }
+                if outputs[2] == 3 {
+                    paddle_x = outputs[0];
+                }
+                if outputs[0] == -1 && outputs[1] == 0 {
+                    println!("Score {}", outputs[2]);
+                    outputs = vec![];
+                    break;
+                }
+
+                tiles.insert((outputs[0], outputs[1]), outputs[2]);
+                outputs = vec![];
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+ 
+    let window = video_subsystem.window("rust-sdl2 demo", 800, 600)
+        .position_centered()
+        .build()
+        .unwrap();
+ 
+    let mut canvas = window.into_canvas().build().unwrap();
+ 
+    canvas.set_draw_color(Color::RGB(255, 255, 255));
+    canvas.clear();
+
+    for ((x, y), value) in tiles {
+        let color = match value {
+            0 => Color::RGB(255, 255, 255),
+            1 => Color::RGB(0, 0, 0),
+            2 => Color::RGB(255, 0, 0),
+            3 => Color::RGB(0, 255, 0),
+            4 => Color::RGB(0, 0, 255),
+            _ => { panic!() },
+        };
+
+        canvas.set_draw_color(color);
+        canvas.fill_rect(Rect::new((x * 10) as i32, (y * 10) as i32, 10, 10)).unwrap();
+    }
+
+    canvas.present();
+    let mut event_pump = sdl_context.event_pump().unwrap();
+    let mut input = 0;
+    'running: while let ProgramResult::Output(new_program, output) = run_program(program, vec![input]) {
+        program = new_program;
+
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit {..} |
+                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                    break 'running
+                },
+                _ => {}
+            }
+        }
+
+        outputs.push(output);
+        if outputs.len() < 3 {
+            continue;
+        }
+        if outputs[0] == -1 && outputs[1] == 0 {
+            println!("Score {}", outputs[2]);
+            outputs = vec![];
+            continue;
+        }
+        if outputs[2] == 4 {
+            ball_x = outputs[0];
+        }
+        if outputs[2] == 3 {
+            paddle_x = outputs[0];
+        }
+
+        if ball_x > paddle_x {
+            input = 1;
+        }
+        if ball_x < paddle_x {
+            input = -1;
+        }
+        if ball_x == paddle_x {
+            input = 0;
+        }
+
+        let color = match outputs[2] {
+            0 => Color::RGB(255, 255, 255),
+            1 => Color::RGB(0, 0, 0),
+            2 => Color::RGB(255, 0, 0),
+            3 => Color::RGB(0, 255, 0),
+            4 => Color::RGB(0, 0, 255),
+            _ => { panic!() },
+        };
+
+        canvas.set_draw_color(color);
+        canvas.fill_rect(Rect::new((outputs[0] * 10) as i32, (outputs[1] * 10) as i32, 10, 10)).unwrap();
+
+        outputs = vec![];
+
+        canvas.present();
+        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 300));
+    }
+
+}
+
+#[derive(Debug)]
+enum Opcode {
+    Add(ParamMode, ParamMode, ParamMode),
+    Multiply(ParamMode, ParamMode, ParamMode),
+    Input(ParamMode),
+    Output(ParamMode),
+    JumpIfTrue(ParamMode, ParamMode),
+    JumpIfFalse(ParamMode, ParamMode),
+    LessThan(ParamMode, ParamMode, ParamMode),
+    Equals(ParamMode, ParamMode, ParamMode),
+    AdjustBase(ParamMode),
+    Halt,
+}
+
+#[derive(Debug)]
+enum ParamMode {
+    Position,
+    Immediate,
+    Relative,
+}
+
+#[derive(Debug)]
+enum ProgramResult {
+    Output(Program, i64),
+    Halt,
+}
+
+#[derive(Debug)]
+struct Program {
+    program: HashMap<i64, i64>,
+    pointer: i64,
+    base: i64,
+}
+
+impl Program {
+    fn get_opcode(&mut self) -> Opcode {
+        let opcode = parse_opcode(*self.program.get(&self.pointer).unwrap_or(&0));
+        self.pointer += 1;
+        opcode
+    }
+    fn get_value(&self) -> i64 {
+        *self.program.get(&self.pointer).unwrap_or(&0)
+    }
+    fn get_index(&self, mode: ParamMode) -> i64 {
+        match mode {
+            ParamMode::Position  => self.get_value(),
+            ParamMode::Immediate => self.pointer,
+            ParamMode::Relative  => (self.get_value() + self.base),
+        }
+    }
+    fn get_param_value(&mut self, mode: ParamMode) -> i64 {
+        let value = *self.program.get(&self.get_index(mode)).unwrap_or(&0);
+        self.pointer += 1;
+        value
+    }
+    fn set_value(&mut self, mode: ParamMode, value: i64) {
+        if let ParamMode::Immediate = mode {
+            panic!();
+        }
+        self.program.insert(self.get_index(mode), value);
+        self.pointer += 1;
+    }
+    fn set_pointer(&mut self, value: i64) {
+        self.pointer = value;
+    }
+    fn adjust_base(&mut self, value: i64) {
+        self.base += value;
+    }
+}
+
+fn run_program(mut program: Program, inputs: Vec<i64>) -> ProgramResult {
+    let mut input_index = 0;
+
+    loop {
+        let opcode = program.get_opcode();
+        // println!("{:?}", opcode);
+
+        match opcode {
+            Opcode::Add(left_mode, right_mode, result_mode) => {
+                let left = program.get_param_value(left_mode);
+                let right = program.get_param_value(right_mode);
+                program.set_value(result_mode, left + right);
+            },
+            Opcode::Multiply(left_mode, right_mode, result_mode) => {
+                let left = program.get_param_value(left_mode);
+                let right = program.get_param_value(right_mode);
+                program.set_value(result_mode, left * right);
+            },
+            Opcode::Input(mode) => {
+                program.set_value(mode, inputs[input_index as usize]);
+                input_index += 1;
+            },
+            Opcode::Output(mode) => {
+                let output = program.get_param_value(mode);
+                return ProgramResult::Output(program, output);
+            },
+            Opcode::JumpIfTrue(condition_mode, jump_mode) => {
+                let condition = program.get_param_value(condition_mode);
+                let jump = program.get_param_value(jump_mode);
+                if condition > 0 {
+                    program.set_pointer(jump);
+                }
+            },
+            Opcode::JumpIfFalse(condition_mode, jump_mode) => {
+                let condition = program.get_param_value(condition_mode);
+                let jump = program.get_param_value(jump_mode);
+                if condition == 0 {
+                    program.set_pointer(jump);
+                }
+            },
+            Opcode::LessThan(left_mode, right_mode, result_mode) => {
+                if program.get_param_value(left_mode) < program.get_param_value(right_mode) {
+                    program.set_value(result_mode, 1);
+                } else {
+                    program.set_value(result_mode, 0);
+                }
+            },
+            Opcode::Equals(left_mode, right_mode, result_mode) => {
+                if program.get_param_value(left_mode) == program.get_param_value(right_mode) {
+                    program.set_value(result_mode, 1);
+                } else {
+                    program.set_value(result_mode, 0);
+                }
+            },
+            Opcode::AdjustBase(mode) => {
+                let new_base = program.get_param_value(mode);
+                program.adjust_base(new_base);
+            },
+            Opcode::Halt => {
+                println!("Program halted!");
+                return ProgramResult::Halt;
+            },
+        }
+    }
+}
+
+fn parse_program(program_as_string: &str) -> Program {
+    let mut program = Program {
+        program: HashMap::new(),
+        base: 0,
+        pointer: 0,
+    };
+
+    let digits: Vec<i64> = program_as_string.split(',').map(|string| {
+        let i: i64 = string.parse().unwrap();
+        i
+    }).collect();
+
+    for (i, digit) in digits.iter().enumerate() {
+        program.program.insert(i as i64, *digit);
+    }
+
+    program
+}
+
+fn parse_param_mode(digits: i64) -> ParamMode {
+    match digits {
+        0 => ParamMode::Position,
+        1 => ParamMode::Immediate,
+        2 => ParamMode::Relative,
+        _ => {
+            panic!("Invalid param mode");
+        },
+    }
+}
+
+fn parse_opcode(digits: i64) -> Opcode {
+    let opcode_as_int = digits % 100;
+
+    match opcode_as_int {
+        1 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            let result_mode = parse_param_mode((digits / 10_000) % 10);
+            assert!((digits / 100_000) == 0);
+            Opcode::Add(left_mode, right_mode, result_mode)
+        },
+        2 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            let result_mode = parse_param_mode((digits / 10_000) % 10);
+            assert!((digits / 100_000) == 0);
+            Opcode::Multiply(left_mode, right_mode, result_mode)
+        },
+        3 => {
+            let mode = parse_param_mode((digits / 100) % 10);
+            assert!((digits / 1000) == 0);
+            Opcode::Input(mode)
+        },
+        4 => {
+            let mode = parse_param_mode((digits / 100) % 10);
+            assert!((digits / 1000) == 0);
+            Opcode::Output(mode)
+        },
+        5 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            assert!((digits / 10_000) == 0);
+            Opcode::JumpIfTrue(left_mode, right_mode)
+        },
+        6 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            assert!((digits / 10_000) == 0);
+            Opcode::JumpIfFalse(left_mode, right_mode)
+        },
+        7 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            let result_mode = parse_param_mode((digits / 10_000) % 10);
+            assert!((digits / 100_000) == 0);
+            Opcode::LessThan(left_mode, right_mode, result_mode)
+        },
+        8 => {
+            let left_mode = parse_param_mode((digits / 100) % 10);
+            let right_mode = parse_param_mode((digits / 1000) % 10);
+            let result_mode = parse_param_mode((digits / 10_000) % 10);
+            assert!((digits / 100_000) == 0);
+            Opcode::Equals(left_mode, right_mode, result_mode)
+        },
+        9 => {
+            let mode = parse_param_mode((digits / 100) % 10);
+            assert!((digits / 1000) == 0);
+            Opcode::AdjustBase(mode)
+        },
+        99 => {
+            assert!((digits / 100) == 0);
+            Opcode::Halt
+        },
+        _ => {
+            panic!("Invalid opcode {}", digits);
+        },
+    }
+}
