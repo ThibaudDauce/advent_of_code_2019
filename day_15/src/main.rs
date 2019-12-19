@@ -1,7 +1,13 @@
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::fs;
+extern crate sdl2; 
 
+use sdl2::pixels::Color;
+use std::{thread, time};
+use sdl2::rect::Rect;
+
+#[allow(clippy::cognitive_complexity)]
 fn main() {
     let program_as_string = fs::read_to_string("input.txt").unwrap();
     let program = parse_program(&program_as_string);
@@ -12,8 +18,22 @@ fn main() {
     robots.insert((0, 0), program);
     let mut i = 0;
     let mut oxygen = None;
+
+
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+ 
+    let window = video_subsystem.window("rust-sdl2 demo", 800, 600)
+        .position_centered()
+        .build()
+        .unwrap();
+ 
+    let mut canvas = window.into_canvas().build().unwrap();
+ 
+    canvas.set_draw_color(Color::RGB(255, 255, 255));
+    canvas.clear();
     
-    'main: loop {
+    loop {
         i += 1;
         let mut new_robots = HashMap::new();
         for ((x, y), program) in robots {
@@ -38,33 +58,96 @@ fn main() {
                         new_robots.insert(new_position, new_program);
                     } else {
                         oxygen = Some(new_position);
-                        break 'main;
                     }
                 }
             }
         }
+        if new_robots.is_empty() {
+            break;
+        }
         robots = new_robots;
 
         
-        for y in -50..50 {
-            for x in -50..50 {
-                if oxygen.is_some() && x == oxygen.unwrap().0 && y == oxygen.unwrap().1 {
-                    print!("V");
+        for y in -30..80 {
+            for x in -30..80 {
+                let color = if oxygen.is_some() && x == oxygen.unwrap().0 && y == oxygen.unwrap().1 {
+                    Color::RGB(255, 0, 0)
                 } else if x == 0 && y == 0 {
-                    print!("O");
+                    Color::RGB(0, 255, 0)
                 } else if walls.contains(&(x, y)) {
-                    print!("#");
+                    Color::RGB(0, 0, 0)
                 } else if visited.contains(&(x, y)) {
-                    print!(".");
+                    Color::RGB(200, 200, 200)
                 } else {
-                    print!(" ");
-                }
+                    Color::RGB(255, 255, 255)
+                };
+
+                canvas.set_draw_color(color);
+                canvas.fill_rect(Rect::new(((x + 30) * 10) as i32, ((y + 30) * 10) as i32, 10, 10)).unwrap();
             }
-            println!();
         }
+        canvas.present();
     }
 
-    println!("Found at {}", i);
+    println!("Found after {} steps", i);
+    
+    let mut oxygens = vec![oxygen.unwrap()];
+    let mut oxygens_visited = vec![oxygen.unwrap()];
+    i = 0;
+    loop {
+        i += 1;
+        let mut new_oxygens = vec![];
+        for (x, y) in oxygens {
+            println!("{:?}", (x, y));
+            for direction in 1..=4 {
+                let new_position = match direction {
+                    1 => (x - 1, y),
+                    2 => (x + 1, y),
+                    3 => (x, y - 1),
+                    4 => (x, y + 1),
+                    _ => panic!(),
+                };
+
+                println!("{:?}", new_position);
+
+                if walls.contains(&new_position) || oxygens_visited.contains(&new_position) {
+                    continue;
+                }
+                oxygens_visited.push(new_position);
+                new_oxygens.push(new_position);
+            }
+        }
+        if new_oxygens.is_empty() {
+            break;
+        }
+        oxygens = new_oxygens;
+        
+        for y in -30..80 {
+            for x in -30..80 {
+                let color = if oxygen.is_some() && x == oxygen.unwrap().0 && y == oxygen.unwrap().1 {
+                    Color::RGB(255, 0, 0)
+                } else if walls.contains(&(x, y)) {
+                    Color::RGB(0, 0, 0)
+                } else if oxygens_visited.contains(&(x, y)) {
+                    Color::RGB(0, 0, 255)
+                } else if visited.contains(&(x, y)) {
+                    Color::RGB(200, 200, 200)
+                } else if x == 0 && y == 0 {
+                    Color::RGB(0, 255, 0)
+                } else {
+                    Color::RGB(255, 255, 255)
+                };
+
+                canvas.set_draw_color(color);
+                canvas.fill_rect(Rect::new(((x + 30) * 10) as i32, ((y + 30) * 10) as i32, 10, 10)).unwrap();
+            }
+        }
+        canvas.present();
+    }
+
+    println!("Oxygen full after {} steps", i);
+
+    thread::sleep(time::Duration::from_millis(100 * 1000));
 }
 
 #[derive(Debug)]
